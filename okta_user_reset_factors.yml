@@ -16,13 +16,13 @@
             project: "{{ help_desk_project }}"
             operation: search
             maxresults: 1
-            jql: resolution = Unresolved AND issuetype = "Service Request" AND text ~ "\"Reset MFA\""
+            jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND text ~ "\"MFA\"" AND Approvals = approved() AND (labels !="ignore_mfa_request" OR labels is EMPTY)
           args:
             fields:
               lastViewed: null
           register: reset_factor_help_desk_ticket
     
-        # Determine if a ticket came back, if it did then set an actioning fact, if not it will skip and end.
+        # Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks and end.
         - name: Set actioning fact. Is there a ticket to action?
           set_fact:
             reset_factor_ticket_needs_actioned: "{{ 'yes' if (reset_factor_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
@@ -46,11 +46,58 @@
             okta_user_name: "{{ parent_help_desk_ticket.meta.fields.reporter.emailAddress }}"
           when: reset_factor_ticket_needs_actioned
     
+        - name: Set Approver Facts
+          set_fact:
+            approver: "{{ parent_help_desk_ticket.meta.fields.customfield_10040.0.approvers.0.approver.emailAddress }}"
+          when: reset_factor_ticket_needs_actioned
+    
+        - name: Ensure the Requestor is not the Approver
+          set_fact:
+            requestor_is_not_approver: "{{ 'yes' if (okta_user_name != approver) else 'no' }}"
+          when: reset_factor_ticket_needs_actioned
+    
+        - name: Comment on issue if the Approver is set as the Requestor.
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            issue: "{{ parent_help_desk_ticket.meta.key }}"
+            operation: comment
+            comment: |
+                    Hi there! 
+                      
+                    This is a comment to let you know that your request for a multi-factor reset has been denied.
+                      
+                    In order to minimize the damage of potentially compromised accounts we require that the requestor and the approver of a ticket like this be different people. 
+    
+                    Please edit the ticket and ensure that your line manager is selected. This ticket will now need manual intervention from the IS Team. Please make a member of the team aware.
+          when: reset_factor_ticket_needs_actioned and not requestor_is_not_approver
+    
+        # Update Parent Helpdesk Ticket with Label to inform completion of task and be ignored on future runs.
+        - name: Updating Parent Help Desk Ticket with ignore label...
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            issue: "{{ parent_help_desk_ticket.meta.key }}"
+            operation: edit
+          args:
+            fields:
+                labels:
+                  - ignore_mfa_request
+          register: parent_help_desk_ticket_label # <var>.meta.key
+          when: reset_factor_ticket_needs_actioned and not requestor_is_not_approver
+    
+        - name: Set Continuation Fact
+          set_fact: 
+            mfa_reset_approved: "{{ 'yes' if requestor_is_not_approver else 'no' }}"
+          when: reset_factor_ticket_needs_actioned
+    
     - hosts: localhost
       gather_facts: no
       vars:
         okta_api_token: "{{ lookup('env','OKTA_API_TOKEN') | default(false) }}"
-        reset_factor_ticket_needs_actioned: "{{ hostvars['example.atlassian.net']['reset_factor_ticket_needs_actioned'] }}"
+        reset_factor_ticket_needs_actioned: "{{ hostvars['example.atlassian.net']['mfa_reset_approved'] }}"
         organization: example
       tasks:
         # Gather Okta ID of the specified User. 
@@ -105,7 +152,7 @@
                     We recommend using Okta Verify for push notifications!
                       
                     If anything went amiss with this automation feel free to reach out to a member of the IS team directly and quote your ticket number, {{ parent_help_desk_ticket.meta.key }}
-          when: reset_factor_ticket_needs_actioned
+          when: mfa_reset_approved
     
         - name: Resolve the issue
           community.general.jira:
@@ -118,5 +165,5 @@
             fields:
               resolution:
                 name: Done
-          when: reset_factor_ticket_needs_actioned
+          when: mfa_reset_approved
     
