@@ -1,0 +1,122 @@
+---
+
+    - hosts: jira
+      gather_facts: no
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+      tasks:
+        # Query for Open MFA Reset Ticket .. 
+        - name: Getting Onboarding Ticket... 
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            project: "{{ help_desk_project }}"
+            operation: search
+            maxresults: 1
+            jql: resolution = Unresolved AND issuetype = "Service Request" AND text ~ "\"Reset MFA\""
+          args:
+            fields:
+              lastViewed: null
+          register: reset_factor_help_desk_ticket
+    
+        # Determine if a ticket came back, if it did then set an actioning fact, if not it will skip and end.
+        - name: Set actioning fact. Is there a ticket to action?
+          set_fact:
+            reset_factor_ticket_needs_actioned: "{{ 'yes' if (reset_factor_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+    
+        # Gather fields of helpdesk ticket for actioning.
+        - name: Getting Parent Help Desk Ticket...
+          vars:
+            help_desk_ticket: "{{ reset_factor_help_desk_ticket.meta.issues.0.key }}"
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            project: "{{ help_desk_project }}"
+            operation: fetch
+            issue: "{{ help_desk_ticket }}"
+          register: parent_help_desk_ticket # <var>.meta.key
+          when: reset_factor_ticket_needs_actioned
+    
+        - name: Set Parent Helpdesk Ticket fact
+          set_fact: 
+            okta_user_name: "{{ parent_help_desk_ticket.meta.fields.reporter.emailAddress }}"
+          when: reset_factor_ticket_needs_actioned
+    
+    - hosts: localhost
+      gather_facts: no
+      vars:
+        okta_api_token: "{{ lookup('env','OKTA_API_TOKEN') | default(false) }}"
+        reset_factor_ticket_needs_actioned: "{{ hostvars['example.atlassian.net']['reset_factor_ticket_needs_actioned'] }}"
+        organization: example
+      tasks:
+        # Gather Okta ID of the specified User. 
+        - name: Query Okta User by ticket reporter.
+          vars:
+            okta_user_name: "{{ hostvars['example.atlassian.net'].okta_user_name }}"
+          uri:
+            url: "https://{{ organization }}.okta.com/api/v1/users?search=profile.email+eq+%22{{ okta_user_name }}%22+and+status+eq+%22ACTIVE%22"
+            method: GET
+            body_format: json
+            return_content: true
+            headers:
+              Accept: application/json
+              Content-Type: application/json
+              Authorization: "SSWS {{ okta_api_token }}"
+          register: okta_user_lookup
+          when: reset_factor_ticket_needs_actioned
+    
+        # Reset all Factors for the specified user.
+        - name: Reset All Factors
+          uri:
+            url: "https://{{ organization }}.okta.com/api/v1/users/{{ okta_user_lookup.json.0.id }}/lifecycle/reset_factors"
+            method: POST
+            body_format: json
+            return_content: true
+            headers:
+              Accept: application/json
+              Content-Type: application/json
+              Authorization: "SSWS {{ okta_api_token }}"
+          when: reset_factor_ticket_needs_actioned
+    
+    - hosts: jira
+      gather_facts: no
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+      tasks:
+        - name: Comment on issue
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            issue: "{{ parent_help_desk_ticket.meta.key }}"
+            operation: comment
+            comment: |
+                    Hi there! 
+                      
+                    This is a comment to let you know that your request for a multi-factor reset has been completed by your friendly example IS Team.
+                      
+                    To set up your 2FA once again, please log into Okta directly via your web browser. If you are already logged in you will need to log out again, you will receive a prompt to set up your MFA.
+                    We recommend using Okta Verify for push notifications!
+                      
+                    If anything went amiss with this automation feel free to reach out to a member of the IS team directly and quote your ticket number, {{ parent_help_desk_ticket.meta.key }}
+          when: reset_factor_ticket_needs_actioned
+    
+        - name: Resolve the issue
+          community.general.jira:
+            uri: "https://{{ ansible_host }}"
+            username: "{{ jira_user }}"
+            password: "{{ jira_api_token }}"
+            issue: "{{ parent_help_desk_ticket.meta.key }}"
+            operation: transition
+            status: Resolve this issue
+            fields:
+              resolution:
+                name: Done
+          when: reset_factor_ticket_needs_actioned
+    
