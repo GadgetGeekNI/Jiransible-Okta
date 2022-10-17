@@ -1,0 +1,180 @@
+---
+
+    # Query for Open Password Reset Ticket .. 
+    - name: Getting Password Reset Ticket...
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        project: "{{ help_desk_project }}"
+        operation: search
+        maxresults: 1
+        jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND Approvals = approved() AND (labels ="password_reset_request" AND labels !="ignore_password_request")
+      args:
+        fields:
+          lastViewed: null
+      register: reset_password_help_desk_ticket
+    
+    # Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks and end.
+    - name: Set actioning fact. Is there a ticket to action?
+      set_fact:
+        reset_password_ticket_needs_actioned: "{{ 'yes' if (reset_password_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+    
+    # Gather fields of helpdesk ticket for actioning.
+    - name: Getting Help Desk Ticket Details...
+      vars:
+        help_desk_ticket: "{{ reset_password_help_desk_ticket.meta.issues.0.key }}"
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        project: "{{ help_desk_project }}"
+        operation: fetch
+        issue: "{{ help_desk_ticket }}"
+      register: password_reset_parent_help_desk_ticket # <var>.meta.key
+      when: reset_password_ticket_needs_actioned
+    
+    # Gather the email address of the end user.
+    - name: Set Parent Helpdesk Ticket fact
+      set_fact: 
+        okta_user_name: "{{ password_reset_parent_help_desk_ticket.meta.fields.reporter.emailAddress }}"
+      when: reset_password_ticket_needs_actioned
+      
+    # Get the email address of the marked approver in the ticket. This will allow us to compare against the requestor email and ensure they do not match.
+    - name: Set Approver Facts
+      set_fact:
+        approver: "{{ password_reset_parent_help_desk_ticket.meta.fields.customfield_10040.0.approvers.0.approver.emailAddress }}"
+      when: reset_password_ticket_needs_actioned
+    
+    # Compare approver and requestor. Ensure they do not match, otherwise set fact to decline the ticket.
+    - name: Ensure the Requestor is not the Approver
+      set_fact:
+        requestor_is_not_approver: "{{ 'yes' if (okta_user_name != approver) else 'no' }}"
+      when: reset_password_ticket_needs_actioned
+    
+    # Verbally scold the user for trying to be their own approver.
+    - name: Comment on issue if the Approver is set as the Requestor.
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        issue: "{{ password_reset_parent_help_desk_ticket.meta.key }}"
+        operation: comment
+        comment: |
+                Hi there! 
+                  
+                This is a comment to let you know that your request for a password reset has been automatically denied.
+                  
+                In order to minimize the damage of potentially compromised accounts we require that the requestor and the approver of a ticket like this be different people. 
+    
+                Please edit the ticket and ensure that your line manager is selected. This ticket will now need manual intervention from the IS Team. Please make a member of the team aware.
+      when: reset_password_ticket_needs_actioned and not requestor_is_not_approver
+    
+    # Update Parent Helpdesk Ticket with Label to inform completion of task and be ignored on future runs.
+    - name: Updating Parent Help Desk Ticket with ignore label...
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        issue: "{{ password_reset_parent_help_desk_ticket.meta.key }}"
+        operation: edit
+      args:
+        fields:
+            labels:
+              - ignore_password_request
+      register: password_reset_parent_help_desk_ticket_label # <var>.meta.key
+      when: reset_password_ticket_needs_actioned and not requestor_is_not_approver
+    
+    # If ticket is approved and requestor is not approver, continue.
+    - name: Set Continuation Fact
+      set_fact: 
+        password_reset_approved: "{{ 'yes' if requestor_is_not_approver else 'no' }}"
+      when: reset_password_ticket_needs_actioned
+    
+    # Gather Okta ID of the specified User. 
+    - name: Query Okta User by ticket reporter.
+      uri:
+        url: "https://{{ organization }}.okta.com/api/v1/users?search=profile.email+eq+%22{{ okta_user_name }}%22+and+status+eq+%22ACTIVE%22"
+        method: GET
+        body_format: json
+        return_content: true
+        headers:
+          Accept: application/json
+          Content-Type: application/json
+          Authorization: "SSWS {{ okta_api_token }}"
+      register: okta_user_lookup
+      when: password_reset_approved
+    
+    # Reset Password for the specified user.
+    - name: Reset Password
+      uri:
+        url: "https://{{ organization }}.okta.com/api/v1/users/{{ okta_user_lookup.json.0.id }}/lifecycle/reset_password?sendEmail=true"
+        method: POST
+        body_format: json
+        return_content: true
+        headers:
+          Accept: application/json
+          Content-Type: application/json
+          Authorization: "SSWS {{ okta_api_token }}"
+      register: password_reset_actioned
+      when: password_reset_approved
+    
+    # Comment on the issue to inform user of completion.
+    - name: Comment on issue
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        issue: "{{ password_reset_parent_help_desk_ticket.meta.key }}"
+        operation: comment
+        comment: |
+                Hi there! 
+                  
+                This is a comment to let you know that your request for an Okta password reset has been automatically approved and actioned. You should have an email sent to your secondary email address to help you set a new Password for your Okta account. 
+                  
+                If anything went amiss with this automation feel free to reach out to a member of the IS team directly and quote your ticket number, {{ password_reset_parent_help_desk_ticket.meta.key }}
+      when: password_reset_approved and password_reset_actioned
+    
+    # Close the ticket.
+    - name: Resolve the issue
+      vars:
+        jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+        help_desk_project: NHD
+        jira_user: jra-is-svc@example.com
+        jira_server: example.atlassian.net
+      community.general.jira:
+        uri: "https://{{ jira_server }}"
+        username: "{{ jira_user }}"
+        password: "{{ jira_api_token }}"
+        issue: "{{ password_reset_parent_help_desk_ticket.meta.key }}"
+        operation: transition
+        status: Resolve this issue
+        fields:
+          resolution:
+            name: Done
+      when: password_reset_approved and password_reset_actioned
+    
