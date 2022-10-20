@@ -1,0 +1,89 @@
+---
+
+- hosts: jira
+  gather_facts: no
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: EHD
+    jira_user: jra-is-svc@example.com
+    jira_isum_project: ISUM
+  tasks:
+    ## Need a Jira API token for this to work
+    - name: Checking for Jira API token environment variable...
+      assert:
+        that: jira_api_token | length > 0
+        fail_msg: > 
+          Jira API token environment var not found! Please create an environment 
+          variable named JIRA_API_TOKEN, and set the value to your Jira API token 
+          found at https://id.atlassian.com/manage/api-tokens
+        success_msg: Jira API token found. Moving on...
+      tags:
+        - onboarding
+        - offboarding
+
+    - name: Gather Open Tickets...
+      tags:
+        - onboarding
+        - offboarding
+        - support
+      include_tasks: tasks/main/isum_check_for_unprocessed_tickets.yml
+
+    - name: Include onboarding tasks...
+      include_tasks: tasks/onboarding/isum_onboarding_tasks.yml
+      tags:
+        - onboarding
+      when: onboarding_ticket_needs_processing
+
+    - name: Include offboarding tasks...
+      include_tasks: tasks/offboarding/isum_offboarding_tasks.yml
+      tags:
+        - offboarding
+      when: offboarding_ticket_needs_processing
+
+- hosts: localhost
+  gather_facts: no
+  vars:
+    okta_api_token: "{{ lookup('env','OKTA_API_TOKEN') | default(false) }}"
+    slack_api_token: "{{ lookup('env','SLACK_API_TOKEN') | default(false) }}"
+    organization: example
+    onboarding_ticket_needs_processing: "{{ hostvars['example.atlassian.net']['onboarding_ticket_needs_processing'] | default(false) }}"
+    reset_factor_ticket_needs_processing: "{{  hostvars['example.atlassian.net']['reset_factor_ticket_needs_processing'] | default(false) }}"
+    reset_password_ticket_needs_actioned: "{{  hostvars['example.atlassian.net']['reset_password_ticket_needs_actioned'] | default(false) }}"
+    department: "{{ hostvars['example.atlassian.net']['department'] | default(false) }}"
+  tasks:
+    ## Need an Okta API Token. Slack too but not as important as only currently used for a very remote scenario.
+    - name: Checking for Okta API token environment variable...
+      assert:
+        that: okta_api_token | length > 0
+        fail_msg: > 
+          Okta API token environment var not found! Please create an environment 
+          variable named OKTA_API_TOKEN, and set the value to your Okta API token 
+          found at https://example-admin.okta.com/admin/access/api/tokens
+        success_msg: Okta API token found. Moving on...
+      tags:
+        - onboarding
+        - support
+
+    - name: Include Create Okta User tasks...
+      include_tasks: tasks/onboarding/okta_user_creation_tasks.yml
+      tags:
+        - onboarding
+      when: onboarding_ticket_needs_processing
+    
+    - name: Include Add Okta Groups Task...
+      include_tasks: tasks/onboarding/okta_user_add_groups_tasks.yml
+      tags:
+        - onboarding
+      when: okta_user_created | default(false)
+    
+    - name: Reset MFA Factors 
+      include_tasks: tasks/support/okta_user_reset_factors.yml
+      tags: 
+        - support
+      when: reset_factor_ticket_needs_processing
+
+    - name: Reset Okta Password
+      include_tasks: tasks/support/okta_user_reset_password.yml
+      tags:
+        - support
+      when: reset_password_ticket_needs_actioned
