@@ -1,0 +1,79 @@
+---
+
+## Pull Open Onboarding Ticket .. 
+- name: Getting Onboarding Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND (labels !="parent_isum_epic" AND labels ="employee_onboarding") AND Approvals = approved()
+  args:
+    fields:
+      lastViewed: null
+  register: onboarding_help_desk_ticket
+
+- name: Set Onboarding processing fact. Is there a ticket to action?
+  set_fact:
+     onboarding_ticket_needs_processing: "{{ 'yes' if (onboarding_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+## Pull Open Offboarding Ticket .. 
+- name: Getting Offboarding Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND (labels !="parent_isum_epic" AND labels ="employee_offboarding") AND Approvals = approved()
+  args:
+    fields:
+      lastViewed: null
+  register: offboarding_help_desk_ticket
+
+- name: Set Offboarding processing fact. Is there a ticket to action?
+  set_fact:
+    offboarding_ticket_needs_processing: "{{ 'yes' if (offboarding_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Query for Open MFA Reset Ticket .. 
+- name: Getting MFA Reset Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND Approvals = approved() AND (labels ="mfa_reset_request" AND labels !="ignore_mfa_request")
+  args:
+    fields:
+       lastViewed: null
+  register: reset_factor_help_desk_ticket
+
+# Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks required by the ticket and end.
+- name: Set MFA actioning fact. Is there a ticket to action?
+  set_fact:
+    reset_factor_ticket_needs_processing: "{{ 'yes' if (reset_factor_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Query for Open Password Reset Ticket .. 
+- name: Getting Password Reset Ticket... 
+  community.general.jira:
+   uri: "https://{{ ansible_host }}"
+   username: "{{ jira_user }}"
+   password: "{{ jira_api_token }}"
+   project: "{{ help_desk_project }}"
+   operation: search
+   maxresults: 1
+   jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND Approvals = approved() AND (labels ="password_reset_request" AND labels !="ignore_password_request")
+  args:
+     fields:
+      lastViewed: null
+  register: reset_password_help_desk_ticket
+  
+# Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks and end.
+- name: Set actioning fact. Is there a ticket to action?
+  set_fact:
+    reset_password_ticket_needs_actioned: "{{ 'yes' if (reset_password_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
