@@ -4,7 +4,7 @@
   gather_facts: no
   vars:
     jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
-    help_desk_project: EHD
+    help_desk_project: NHD
     jira_user: jra-is-svc@example.com
     jira_isum_project: ISUM
   tasks:
@@ -49,6 +49,7 @@
     onboarding_ticket_needs_processing: "{{ hostvars['example.atlassian.net']['onboarding_ticket_needs_processing'] | default(false) }}"
     reset_factor_ticket_needs_processing: "{{  hostvars['example.atlassian.net']['reset_factor_ticket_needs_processing'] | default(false) }}"
     reset_password_ticket_needs_actioned: "{{  hostvars['example.atlassian.net']['reset_password_ticket_needs_actioned'] | default(false) }}"
+    application_request_ticket_needs_actioned: "{{  hostvars['example.atlassian.net']['application_request_ticket_needs_actioned'] | default(false) }}"
     department: "{{ hostvars['example.atlassian.net']['department'] | default(false) }}"
   tasks:
     ## Need an Okta API Token. Slack too but not as important as only currently used for a very remote scenario.
@@ -87,7 +88,7 @@
       tags:
         - support
       when: reset_password_ticket_needs_actioned
-     
+
     - name: Check for Application Requests with approval
       include_tasks: tasks/support/okta_user_application_request.yml
       tags:
