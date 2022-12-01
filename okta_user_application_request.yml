@@ -1,0 +1,189 @@
+---
+
+# Query for Open Approved Application Request Ticket .. 
+- name: Getting Approved Application Request Ticket...
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND Approvals = approved() AND (labels ="user_application_request" AND labels !="ignore_app_request")
+  args:
+    fields:
+      lastViewed: null
+  register: application_request_help_desk_ticket
+
+# Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks and end.
+- name: Set actioning fact. Is there a ticket to action?
+  set_fact:
+    application_request_ticket_needs_actioned: "{{ 'yes' if (application_request_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Gather fields of helpdesk ticket for actioning.
+- name: Getting Parent Help Desk Ticket...
+  vars:
+    help_desk_ticket: "{{ application_request_help_desk_ticket.meta.issues.0.key }}"
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: fetch
+    issue: "{{ help_desk_ticket }}"
+  register: app_rq_parent_help_desk_ticket # <var>.meta.key
+  when: application_request_ticket_needs_actioned
+
+# Setting Facts for Requestor and Application for Okta query
+- name: Set Parent Helpdesk Ticket facts
+  set_fact: 
+    okta_app_user_name: "{{ app_rq_parent_help_desk_ticket.meta.fields.reporter.emailAddress }}"
+    requested_application_name: "{{ app_rq_parent_help_desk_ticket.meta.fields.customfield_10253.value }}"
+    app_approver: "{{ app_rq_parent_help_desk_ticket.meta.fields.customfield_10040.0.approvers.0.approver.emailAddress | default(false) }}"
+  when: application_request_ticket_needs_actioned
+
+# Make sure the Requestor of the App isn't the Approver. This shouldn't be necessary but it's good practice to implement.
+- name: Ensure the Requestor is not the Approver
+  set_fact:
+    requestor_is_not_approver: "{{ 'yes' if (okta_app_user_name != app_approver) else 'no' }}"
+  when: application_request_ticket_needs_actioned
+
+# Berate the user if they try to approve their own app.
+- name: Comment on issue if the Approver is set as the Requestor.
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ app_rq_parent_help_desk_ticket.meta.key }}"
+    operation: comment
+    comment: |
+            Hi there! 
+              
+            This is a comment to let you know that your request for {{requested_application_name}} has been denied.
+              
+            In order to minimize the damage of potentially compromised accounts we require that the requestor and the approver of a ticket like this be different people. 
+
+            Please edit the ticket and ensure that your line manager is selected. This ticket will now need manual intervention from the IS Team. Please make a member of the team aware.
+  when: application_request_ticket_needs_actioned and not requestor_is_not_approver
+
+# Update Ticket to Ignore on future runs due to the approver = requestor workflow.
+- name: Updating Parent Help Desk Ticket with ignore label...
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ app_rq_parent_help_desk_ticket.meta.key }}"
+    operation: edit
+  args:
+    fields:
+        labels:
+          - ignore_app_request
+  register: app_rq_parent_help_desk_ticket_label # <var>.meta.key
+  when: application_request_ticket_needs_actioned and not requestor_is_not_approver
+
+# Set the fact to action the request and assign the app.
+- name: Setting actioning fact to continue the workflow.
+  set_fact:
+    app_request_needs_actioned: "{{ 'yes' if requestor_is_not_approver else '' }}"
+  when: application_request_ticket_needs_actioned and requestor_is_not_approver
+
+# Take the given app list and match it to the correct Okta group ID. Make it Alphabetical to make it easier to follow.
+- name: Set Okta Group ID based on App.
+  set_fact:
+    okta_app_group_id: >-
+      {{
+      '00gtlsf7xvPc9yx2N5d6' if requested_application_name == 'Asset Panda' else
+      '00gtsb4gjYz0klmIR5d6' if requested_application_name == 'Office 365'
+      else ''
+      }}
+  when: app_request_needs_actioned
+
+# Gather Okta ID of the specified User. 
+- name: Query Okta User by ticket reporter.
+  vars:
+    okta_api_token: "{{ lookup('env','OKTA_API_TOKEN') | default(false) }}"
+    organization: example
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/users?search=profile.email+eq+%22{{ okta_app_user_name }}%22+and+status+eq+%22ACTIVE%22"
+    method: GET
+    body_format: json
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  register: okta_app_user_lookup
+  when: app_request_needs_actioned and okta_app_group_id is defined
+
+# Utilise the API to add the user to the App-{Application} Okta Group.
+- name: Add Okta User to Application Group
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_app_group_id }}/users/{{ okta_app_user_lookup.json.0.id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  register: okta_user_added_to_app
+  when: app_request_needs_actioned
+
+# Berate the user if they try to approve their own app.
+- name: Comment on issue if the Approver is set as the Requestor.
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ app_rq_parent_help_desk_ticket.meta.key }}"
+    operation: comment
+    comment: |
+            Hi there! 
+              
+            This is a comment to let you know that your request for {{requested_application_name}} has been automatically approved and actioned. To access {{requested_application_name}} you may have to log out and back into Okta. In some outlier instances, the application may not appear for up to an hour.
+              
+            If anything went amiss with this automation feel free to reach out to a member of the IS team directly and quote your ticket number, {{ app_rq_parent_help_desk_ticket.meta.key }}
+  when: (application_request_ticket_needs_actioned) and (okta_user_added_to_app)
+
+- name: Resolve the issue
+  vars:
+    jira_api_token: "{{ lookup('env','JIRA_API_TOKEN') | default(false) }}"
+    help_desk_project: NHD
+    jira_user: jra-is-svc@example.com
+    jira_server: example.atlassian.net
+  community.general.jira:
+    uri: "https://{{ jira_server }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ app_rq_parent_help_desk_ticket.meta.key }}"
+    operation: transition
+    status: Resolve this issue
+    fields:
+      resolution:
+        name: Done
+  when: application_request_ticket_needs_actioned and okta_user_added_to_app
