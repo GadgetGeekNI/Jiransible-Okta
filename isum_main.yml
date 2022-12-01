@@ -87,3 +87,9 @@
       tags:
         - support
       when: reset_password_ticket_needs_actioned
+     
+    - name: Check for Application Requests with approval
+      include_tasks: tasks/support/okta_user_application_request.yml
+      tags:
+        - support
+      when: application_request_ticket_needs_actioned
