@@ -9,7 +9,7 @@
     project: "{{ help_desk_project }}"
     operation: search
     maxresults: 1
-    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND (labels !="parent_isum_epic" AND labels ="employee_onboarding") AND Approvals = approved()
+    jql: resolution = Unresolved AND issuetype = "Service Request" AND (labels !="parent_isum_epic" AND labels ="employee_onboarding")
   args:
     fields:
       lastViewed: null
@@ -28,7 +28,7 @@
     project: "{{ help_desk_project }}"
     operation: search
     maxresults: 1
-    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND (labels !="parent_isum_epic" AND labels ="employee_offboarding") AND Approvals = approved()
+    jql: resolution = Unresolved AND issuetype = "Service Request" AND (labels !="parent_isum_epic" AND labels ="employee_offboarding")
   args:
     fields:
       lastViewed: null
@@ -77,3 +77,23 @@
 - name: Set actioning fact. Is there a ticket to action?
   set_fact:
     reset_password_ticket_needs_actioned: "{{ 'yes' if (reset_password_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Query for Open Approved Application Request Ticket .. 
+- name: Getting Approved Application Request Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request with Approvals" AND Approvals = approved() AND (labels ="user_application_request" AND labels !="ignore_app_request")
+  args:
+    fields:
+      lastViewed: null
+  register: application_request_help_desk_ticket
+
+# Determine if a ticket came back, if it did then set an actioning fact, if not then it will skip the remaining tasks and end.
+- name: Set actioning fact. Is there a ticket to action?
+  set_fact:
+    application_request_ticket_needs_actioned: "{{ 'yes' if (application_request_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
