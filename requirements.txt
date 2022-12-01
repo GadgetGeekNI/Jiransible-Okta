@@ -1,0 +1,11 @@
+ansible
+ansible-core
+cffi
+cryptography
+Jinja2
+MarkupSafe
+packaging
+pycparser
+pyparsing
+PyYAML
+resolvelib
