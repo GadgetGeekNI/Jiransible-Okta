@@ -1,0 +1,127 @@
+---
+
+# Query First Name and Last Name to ensure there is no already matching end user. Otherwise the Okta user creation will fail.
+- name: Query Okta User by First Name and Last Name
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/users?search=profile.firstName+eq+%22{{ hostvars['example.atlassian.net'].first_name }}%22+and+profile.lastName+eq+%22{{ hostvars['example.atlassian.net'].last_name }}%22"
+    method: GET
+    body_format: json
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  register: okta_name_match_query
+
+- name: Set fact to allow the continuation of the play if there is no match for okta_name_match_query
+  set_fact: 
+    okta_name_is_unique: "{{ 'yes' if (okta_name_match_query.json | length == 0) else 'no' }}"
+
+# Very remote scenario but error handling that needs to be in place all the same.
+- name: Send notification message via Slack when Okta Name is a Duplicate
+  community.general.slack:
+    token: "{{ slack_api_token }}"
+    msg: |
+      I was unable to automatically provision {{ hostvars['example.atlassian.net'].first_name }} {{ hostvars['example.atlassian.net'].last_name }} as someone with their first/lastname already exists in Okta.
+      ~ Have we started cloning people again? ~
+      Unfortunately in Okta you cannot have two end users with the same first & last name.
+      Please reach out to the end user to provide an initial such as a middle name to add to their Username, or a nickname that they would rather be called. E.G, Michael becomes Mike, etc.
+      :party_blob: Don't forget to feed yourself with caffeine to keep fuel levels up & Have a wonderful day! :party_blob:
+    channel: '#is_isum_board'
+    color: danger
+  delegate_to: localhost
+  when: not okta_name_is_unique
+
+# Generate an Okta username, using First Name Last Initial @ example.com , johnd@example.com for example. 
+#This will be used to check for an existing instance of the username. If it matches, it switches to First Initial Last Name @example.com
+- name: Generate Okta username
+  vars:
+    first_name: "{{ hostvars['example.atlassian.net'].first_name | lower }}"
+    last_name: "{{ hostvars['example.atlassian.net'].last_name | lower }}"
+    desired_username: "{{ first_name | lower | regex_replace('( |-)','XX') | regex_replace('(XX)([A-Za-z])(.*)','\\2') }}{{last_name | lower | regex_findall('(\\b\\w)') | join }}@example.com"
+    backup_username: "{{ first_name[:1] }}{{ last_name | regex_replace('[^A-Za-z]+', '') }}@example.com"
+  set_fact:
+    desired_okta_username: "{{ desired_username }}"
+    backup_okta_username: "{{ backup_username }}"
+  when: okta_name_is_unique
+
+- name: Dump Okta usernames
+  debug:
+    msg: "Desired Username: {{ desired_okta_username }}, Backup Username: {{ backup_okta_username }}"
+    verbosity: 1
+  when: okta_name_is_unique
+
+# List User by email. Ensure no current user matches desired_okta_username. 
+- name: Query Okta User by Generated Okta Username
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/users?search=profile.email+eq+%22{{ desired_okta_username }}%22+and+status+eq+%22ACTIVE%22"
+    method: GET
+    body_format: json
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  register: okta_user_lookup
+  when: okta_name_is_unique
+
+- name: Dump Okta usernames
+  debug:
+    msg: "{{ okta_user_lookup }}"
+    verbosity: 1
+  when: okta_name_is_unique
+
+# Determine the Okta Username based on the results of the initial user lookup.
+- name: Set Okta Username
+  set_fact:
+    okta_username: "{{ desired_okta_username if (okta_user_lookup.json | length == 0) else backup_okta_username }}"
+  when: okta_name_is_unique
+
+- name: Dump Okta Username 
+  debug:
+    msg: "The Okta Username is: {{ okta_username }}"
+    verbosity: 1
+  when: okta_name_is_unique
+
+# This action will create the Okta user, staged which means that we can manually activate them later
+- name: Create Okta user
+  vars:
+    first_name: "{{ hostvars['example.atlassian.net'].first_name }}"
+    last_name: "{{ hostvars['example.atlassian.net'].last_name }}"
+    secondary_email: "{{ hostvars['example.atlassian.net'].secondary_email }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/users?activate=false"
+    method: POST
+    body_format: json
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+    body:
+      profile:
+        firstName: "{{ first_name }}"
+        lastName: "{{ last_name }}"
+        email: "{{ okta_username }}"
+        login: "{{ okta_username }}"
+        secondEmail: "{{ secondary_email }}"
+  register: okta_user
+  when: okta_name_is_unique
+
+# Set Okta User ID for Group Add Task
+- name: Set Okta User ID for future use
+  set_fact: 
+    okta_user_id: "{{ okta_user.json.id }}"
+  when: okta_name_is_unique
+
+- name: Dump Okta usernames
+  debug:
+    msg: "Okta User ID: {{ okta_user_id }}"
+    verbosity: 1
+  when: okta_name_is_unique
+
+# Set Continuation Fact. If no User ID, the play will end.
+- name: set Okta User Exists fact
+  set_fact:
+    okta_user_created:  "{{ 'yes' if (okta_user_id | length > 0) else 'no' }}"
+  when: okta_name_is_unique

@@ -1,0 +1,194 @@
+---
+
+## Pull Open Offboarding Ticket .. 
+- name: Getting Offboarding Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request" AND (labels !="parent_isum_epic" AND labels ="employee_offboarding")
+  args:
+    fields:
+      lastViewed: null
+  register: offboarding_help_desk_ticket
+
+- name: Dump offboarding Helpdesk Ticket...
+  debug:
+    var: offboarding_help_desk_ticket
+    verbosity: 1
+
+- name: Set processing fact. Is there a ticket to action?
+  set_fact:
+    offboarding_ticket_needs_processing: "{{ 'yes' if (offboarding_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Get Parent Help Desk Ticket
+- name: Getting Parent Help Desk Ticket...
+  vars:
+    help_desk_ticket: "{{ offboarding_help_desk_ticket.meta.issues.0.key }}"
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: fetch
+    issue: "{{ help_desk_ticket }}"
+  register: offboarding_parent_help_desk_ticket # <var>.meta.key
+  when: offboarding_ticket_needs_processing
+
+- name: Dump Parent Help Desk Ticket...
+  debug:
+    var: offboarding_parent_help_desk_ticket
+    verbosity: 1
+
+- name: Set Parent Helpdesk Ticket fact
+  set_fact: 
+    offboarding_parent_help_desk_ticket: "{{ offboarding_parent_help_desk_ticket }}"
+    first_name: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10083 | trim }}"
+    last_name: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10084 }}"
+    secondary_email: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10085 }}"
+    department: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10141.value }}"
+    employment_status: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10136.value | default('Missing') }}"
+    employee_name: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10083 | trim }} {{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10084 }}"
+  when: offboarding_ticket_needs_processing
+
+## Create Issues
+# Create parent Epic
+- name: Creating parent epic...
+  vars:
+    leaving_date: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10090 }}"
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Offboard {{ employee_name }} {{ leaving_date }}"
+    description: " {{ offboarding_parent_help_desk_ticket.meta.fields.description }} "
+    issuetype: Epic
+  args:
+    fields:
+      customfield_10197: "{{ first_name }}" # First Name
+      customfield_10198: "{{ last_name }}" # Last Name
+      customfield_10199: "{{ offboarding_parent_help_desk_ticket.meta.fields.customfield_10138 }}" # Phone Number
+      customfield_10206: "{{ employment_status }}" # FTE VS 1099
+      customfield_10207: "{{ department }}" # Department
+      duedate: "{{ leaving_date }}" # Last Day
+  register: parent_epic
+  when: offboarding_ticket_needs_processing
+
+- name: Dump Epic details
+  debug:
+    var: parent_epic
+    verbosity: 1
+
+# Create Offboard Manual Apps task
+- name: Creating Manual Apps task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Manual Offboarding Tasks - {{ employee_name }}"
+    description: |
+      Reset {{ employee_name }}'s Okta password, remove all 2fa Devices, remove all active login sessions.
+      Transfer Ownership of their Google account to departed-colleagues@example.com for future auditing purposes. Refer to https://example.atlassian.net/l/c/b3Rjpkz8. 
+      Remove {{ employee_name }} from all Okta groups after the above is complete to revoke all SAML provisioned application access.
+      After deleting the end user from Gmail, add their email as an alias of departed-colleagues@example.com
+      Please Manually remove {{ employee_name }}'s accounts in the following applications:
+      {{ 'VPN Operator Cert - Manually remove from Wolfcreek/Chipriver OpenVPN servers.' if department == 'Pandion' or department == 'Information Systems' or department == 'Technology/R&D' or department == 'Product Management' else ''}}
+      {{ 'Bitbucket - Manually remove Employee from Bitbucket' if department == 'Information Systems' or department == 'Technology/R&D' or department == 'Pandion' or department == 'Product Management' else '' }}
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - employee_offboarding
+        - accounts
+  register: offboarding_manual_accounts_task # <var>.meta.key
+  when: offboarding_ticket_needs_processing
+
+- name: Dump Manual Apps Ticket details
+  debug:
+    var: offboarding_manual_accounts_task
+    verbosity: 1
+
+# Generate Link between Parent Helpdesk Ticket and Offboarding Epic
+- name: Create link from NHD to ISUM Parent EPIC
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ offboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ parent_epic.meta.key }}'
+  when: offboarding_ticket_needs_processing
+
+# Create laptop Retrieval Task
+- name: Creating laptop retrieval task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Retrieve Macbook - {{ employee_name }}"
+    description: |
+      "Please fill in the details of the laptop return in this task. Do NOT close this ticket off until the laptop has been confirmed as received by a member of the IS team or other recipient."
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+  register: laptop_retrieve_task # <var>.meta.key
+  when: offboarding_ticket_needs_processing and employment_status == "Full Time Employee"
+
+- name: Create link from NHD to ISUM Laptop Retrieval Task
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ offboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ laptop_retrieve_task.meta.key }}'
+  when: offboarding_ticket_needs_processing and employment_status == "Full Time Employee"
+
+# Create Delete Jamf Prestage Enrollment Task
+- name: Creating Delete Jamf Prestage Profile Task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Delete Jamf Prestage Profile - {{ employee_name }}"
+    description: |
+      "Ensure that the Prestage Enrollment for {{ employee_name }} has been deleted and the macbook moved to the 'Unassigned Devices' prestage enrollment instead."
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+  register: prestage_delete_task # <var>.meta.key
+  when: offboarding_ticket_needs_processing and employment_status == "Full Time Employee"
+
+# Update Parent Helpdesk Ticket with Label to inform completion of task and be ignored on future runs.
+- name: Updating Parent Help Desk Ticket with ignore label...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ offboarding_parent_help_desk_ticket.meta.key }}"
+    operation: edit
+  args:
+    fields:
+        labels:
+          - parent_isum_epic
+  register: offboarding_parent_help_desk_ticket_label # <var>.meta.key
+  when: offboarding_ticket_needs_processing

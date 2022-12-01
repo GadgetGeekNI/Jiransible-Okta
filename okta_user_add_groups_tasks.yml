@@ -1,0 +1,321 @@
+---
+
+# To add additional group IDs, run the get_objects/get_okta_group.yml play.
+
+# Utilise the API to add the created Okta user to the All-example group, assigning them a Google Workspace license etc.
+- name: Add Okta User to All-example
+  vars:
+    okta_group_id: 00gakptbwFlZm0iJF5d6
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created
+
+# Add the created Okta user to the All-example-FTE group.
+- name: Add Okta User to All-example-FTE
+  vars:
+    okta_group_id: 00gt2m6oa6UCgOZPX5d6
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Contractor group.
+- name: Add Okta User to All-example-Contractor
+  vars:
+    okta_group_id: 00gtlpy7seKNN4Fbo5d6
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and employment_status == '1099 Contractor'
+
+# Add the created Okta user to the All-example-FTE-US group.
+- name: Add Okta User to All-example-FTE-US
+  vars:
+    okta_group_id: 00g1eo25cdRw1jPHg5d7
+    employee_location: "{{ hostvars['example.atlassian.net']['employee_location'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and employee_location == 'US' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-FTE-UK group.
+- name: Add Okta User to All-example-FTE-UK
+  vars:
+    okta_group_id: 00g1eo0pxiaSF55bl5d7
+    employee_location: "{{ hostvars['example.atlassian.net']['employee_location'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and employee_location == 'UK' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Pandion-Team group.
+- name: Add Okta User to All-example-Pandion-Team
+  vars:
+    okta_group_id: "00gt2nteah2FG25ha5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Pandion'
+
+# Add the created Okta user to the All-example-Pandion-FTE group.
+- name: Add Okta User to All-example-Pandion-FTE
+  vars:
+    okta_group_id: "00gwl75sc1IF2KJeW5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Pandion' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Pandion-Contractor group.
+- name: Add Okta User to All-example-Pandion-Contractor
+  vars:
+    okta_group_id: "00gwl7v97z0vvF3XX5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Pandion' and employment_status == '1099 Contractor'
+
+# Add the created Okta user to the Netsuite-Consultant group.
+- name: Add Okta User to Netsuite-Consultant
+  vars:
+    okta_group_id: "00gts7i9pKyTBCjcF5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Pandion' or department == 'Technology/R&D'
+
+# Add the created Okta user to the All-example-IS-Team group.
+- name: Add Okta User to All-example-IS-Team
+  vars:
+    okta_group_id: "00gt2qsfh7PVVxxh85d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Information Systems' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-PS-Team group.
+- name: Add Okta User to All-example-PS-Team
+  vars:
+    okta_group_id: "00g29m8f6338xrpzH5d7"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'People Strategy (PS)' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Sales-Team group.
+- name: Add Okta User to All-example-Sales-Team
+  vars:
+    okta_group_id: "00gt3ga5q4qwtgpwC5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Sales' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Marketing-Team group.
+- name: Add Okta User to All-example-Marketing-Team
+  vars:
+    okta_group_id: "00g3qexi5v3M4ysgc5d7"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Marketing' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Finance-Team group.
+- name: Add Okta User to All-example-Finance-Team
+  vars:
+    okta_group_id: "00gt30a0l8vLQwlsd5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Finance' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Product-Team group.
+- name: Add Okta User to All-example-Product-Team
+  vars:
+    okta_group_id: "00g4xddykwvTV1nwb5d7"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Product Management' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the All-example-Development-Team group.
+- name: Add Okta User to All-example-Development-Team
+  vars:
+    okta_group_id: "00g15avaf7ckTg2Jy5d7"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Technology/R&D' and employment_status == 'Full Time Employee'
+
+# Add the created Okta user to the Netsuite-Dept-R&D group.
+- name: Add Okta User to Netsuite-Dept-R&D
+  vars:
+    okta_group_id: "00gts7i9pKyTBCjcF5d6"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Technology/R&D' and employment_status == 'Full Time Employee'
+
+  # Add the created Okta user to the All-example-Legal-Team group.
+- name: Add Okta User to All-example-Legal-Team
+  vars:
+    okta_group_id: "00g76eylqagU5vrn05d7"
+    department: "{{ hostvars['example.atlassian.net']['department'] }}"
+    employment_status: "{{ hostvars['example.atlassian.net']['employment_status'] }}"
+  uri:
+    url: "https://{{ organization }}.okta.com/api/v1/groups/{{ okta_group_id }}/users/{{ okta_user_id }}"
+    method: PUT
+    body_format: json
+    status_code: 200, 204
+    return_content: true
+    headers:
+      Accept: application/json
+      Content-Type: application/json
+      Authorization: "SSWS {{ okta_api_token }}"
+  when: okta_user_created and department == 'Legal' and employment_status == 'Full Time Employee'

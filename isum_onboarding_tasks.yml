@@ -1,0 +1,356 @@
+---
+
+## Pull Open Onboarding Ticket .. 
+- name: Getting Onboarding Ticket... 
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: search
+    maxresults: 1
+    jql: resolution = Unresolved AND issuetype = "Service Request" AND (labels !="parent_isum_epic" AND labels ="employee_onboarding")
+  args:
+    fields:
+      lastViewed: null
+  register: onboarding_help_desk_ticket
+
+- name: Dump Onboarding Helpdesk Ticket...
+  debug:
+    var: onboarding_help_desk_ticket
+    verbosity: 1
+
+- name: Set processing fact. Is there a ticket to action?
+  set_fact:
+    onboarding_ticket_needs_processing: "{{ 'yes' if (onboarding_help_desk_ticket.meta.issues | length > 0) else 'no' }}"
+
+# Get Parent Help Desk Ticket
+- name: Getting Parent Help Desk Ticket...
+  vars:
+    help_desk_ticket: "{{ onboarding_help_desk_ticket.meta.issues.0.key }}"
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ help_desk_project }}"
+    operation: fetch
+    issue: "{{ help_desk_ticket }}"
+  register: onboarding_parent_help_desk_ticket # <var>.meta.key
+  when: onboarding_ticket_needs_processing
+
+- name: Dump Parent Help Desk Ticket...
+  debug:
+    var: onboarding_parent_help_desk_ticket
+    verbosity: 1
+
+- name: Set Parent Helpdesk Ticket fact
+  set_fact: 
+    onboarding_parent_help_desk_ticket: "{{ onboarding_parent_help_desk_ticket }}"
+    first_name: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10083 | trim }}"
+    last_name: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10084 }}"
+    secondary_email: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10085 }}"
+    department: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10141.value }}"
+    employment_status: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10136.value | default('Missing') }}"
+    employee_location: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10223.value }}"
+    employee_name: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10083 | trim }} {{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10084 }}"
+  when: onboarding_ticket_needs_processing
+
+## Create Issues
+# Create parent Epic
+- name: Creating parent epic...
+  vars:
+    start_date: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10139 }}"
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Onboard {{ employee_name }} {{ start_date }}"
+    description: "A new employee, {{ employee_name }}, will be starting soon."
+    issuetype: Epic
+  args:
+    fields:
+      customfield_10197: "{{ first_name }}" # First Name
+      customfield_10198: "{{ last_name }}" # Last Name
+      customfield_10199: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10138 }}" # Phone Number
+      customfield_10200: "{{ secondary_email }}" # Personal Email Address
+      customfield_10206: "{{ employment_status }}" # FTE VS 1099
+      customfield_10207: "{{ department }}" # Department
+      customfield_10203: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10252.emailAddress }}" # Hiring Manager
+      customfield_10204: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10142 }}" # Position
+      duedate: "{{ onboarding_parent_help_desk_ticket.meta.fields.customfield_10139 }}" # Start Date
+  register: parent_epic
+  when: onboarding_ticket_needs_processing
+
+- name: Dump Epic details
+  debug:
+    var: parent_epic
+    verbosity: 1
+
+- name: Create link from NHD to ISUM Parent EPIC
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ onboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ parent_epic.meta.key }}'
+  when: onboarding_ticket_needs_processing
+
+# Create Manual Task needed fact
+- name: Create Manual Task Needed fact
+  set_fact:
+    manual_task_needed: >- 
+      {{
+      'true'
+      if (
+      department == 'Pandion' 
+      or department == 'Information Systems' 
+      or department == 'Technology/R&D' 
+      or department == 'Product Management'
+      )
+      else ''
+      }}
+  when: (onboarding_ticket_needs_processing) and (employment_status == 'Full Time Employee')
+
+# Create Onboard Manual Apps task
+- name: Creating Manual Apps task..
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Manual Onboarding Tasks - {{ employee_name }}"
+    description: |
+      Please Manually create {{ employee_name }}s' account's in the following applications.
+      {{ 'VPN Operator Cert - Refer to https://example.atlassian.net/l/c/1Mfz1cGd.' if department == 'Pandion' or department == 'Information Systems' or department == 'Technology/R&D' or department == 'Product Management' else ''}}
+      {{ 'Bitbucket - Invite to Bitbucket here https://bitbucket.org/examplegroup/workspace/members/ and add to the following group here https://bitbucket.org/examplegroup/workspace/settings/groups ;' if department == 'Information Systems' or department == 'Technology/R&D' else '' }} {{ 'Development-Write' if department == 'Technology/R&D' else 'Information_Systems-Write' if department == 'Information Systems' else '' }}.
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - new_employee
+        - accounts
+  register: onboarding_manual_accounts_task # <var>.meta.key
+  when: manual_task_needed is defined
+
+- name: Dump Manual Apps Ticket details
+  debug:
+    var: onboarding_manual_accounts_task
+    verbosity: 1
+
+- name: Laptop Selection Task
+  set_fact:
+    laptop_spec: >-
+      "{{
+      'Macbook Pro 16 Base Spec' if department == 'Pandion' or department =='Information Systems'
+      else 
+      'Macbook Pro 14 Base Spec'
+      }}"
+  when: 
+    - onboarding_ticket_needs_processing 
+    - employment_status == "Full Time Employee" 
+
+# Create laptop procurement Task
+- name: Creating laptop procurement task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Order Macbook - {{ employee_name }}"
+    description: |
+      "Please order a {{ laptop_spec }}. 
+      Add the Apple tracking information and Invoice number to a ticket comment. 
+      Utilise the CC option to add the following; {{ secondary_email }}, & IT Team
+      Include the Order Status in the appropriate custom field so that we can all keep track of it more easily and when it is closed, this tracking field value is sent to the ticket requestor in NHD."
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      customfield_10209: "Please replace this with the Apple Order Number / Tracking URL after ordering the Mac."
+      labels:
+        - new_employee
+        - procurement
+        - hardware
+  register: laptop_task # <var>.meta.key
+  when: onboarding_ticket_needs_processing and laptop_spec is defined
+
+- name: Create link from NHD to ISUM Laptop Task
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ onboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ laptop_task.meta.key }}'
+  when: onboarding_ticket_needs_processing and laptop_spec is defined
+
+- name: Dump Laptop Procurement Ticket details
+  debug:
+    var: laptop_task
+    verbosity: 1
+
+# Create peripheral procurement Task
+- name: Creating peripheral procurement task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Order Peripherals - {{ employee_name }}"
+    description: |
+      Please link the Help Desk New Hire Equipment Request form to this ticket for user {{ employee_name }} and order as requested.
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - new_employee
+        - procurement
+        - hardware
+  register: peripherals_task # <var>.meta.key
+  when: 
+    - onboarding_ticket_needs_processing
+    - employment_status == 'Full Time Employee'
+
+- name: Create link from NHD to ISUM Peripheral Task
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ onboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ peripherals_task.meta.key }}'
+  when: 
+    - onboarding_ticket_needs_processing
+    - employment_status == 'Full Time Employee'
+
+- name: Dump Peripheral Order Ticket details
+  debug:
+    var: peripherals_task
+    verbosity: 1
+
+# Create Jamf PreStage Enrollment Task
+- name: Creating Jamf Prestage task...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Jamf Prestage Enrollment - {{ employee_name }}"
+    description: |
+      Please configure {{ employee_name }}'s Jamf Prestage Enrollment.
+      Refer to https://example.atlassian.net/l/c/ZM9nxGwG for more information on how to do this.
+      As per the above documentation, you can clone your own version of the template and fill out the blanks here: https://example.jamfcloud.com/computerEnrollmentPrestage.html?id=93&o=clone
+      Ensure that you do not forget to add {{ employee_name }}'s Macbook to their Prestage when it appears in Jamf. Do not close this task out until you have added in the serial of the device to the Prestage.
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - new_employee
+        - device_configuration
+  register: config_task # <var>.meta.key
+  when: onboarding_ticket_needs_processing and (employment_status == 'Full Time Employee')
+
+- name: Dump Jamf Prestage Ticket details
+  debug:
+    var: config_task
+    verbosity: 1
+
+# Create Activate Okta Task
+- name: Creating Activate Okta task..
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Activate Okta Account - {{ employee_name }}"
+    description: |
+      Please Activate {{ employee_name }}'s Okta account in the week before their start date.
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - new_employee
+        - accounts
+  register: okta_account_activation_task # <var>.meta.key
+  when: onboarding_ticket_needs_processing
+
+- name: Dump Activate Okta Ticket details
+  debug:
+    var: okta_account_activation_task
+    verbosity: 1
+
+- name: Create link from NHD to ISUM Okta Account Activation Task
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    operation: link
+    linktype: Relates
+    inwardissue: '{{ onboarding_parent_help_desk_ticket.meta.key }}'
+    outwardissue: '{{ okta_account_activation_task.meta.key }}'
+  when: onboarding_ticket_needs_processing
+
+# Create Welcome Email task
+- name: Creating Welcome Email task..
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    project: "{{ jira_isum_project }}"
+    operation: create
+    summary: "Send IS Welcome Email - {{ employee_name }}"
+    description: |
+      Please Email {{ employee_name }} after their Macbook and Peripherals are ordered to introduce yourself, let them know their kit is incoming and to establish a POC for them before day 1.
+
+      Feel free to use the HyperLink below which will generate an email for the new hire, edit as necessary.
+
+      mailto:{{ secondary_email }}?subject=Welcome%20to%20example!&body=Hi%20there%20{{ first_name }}%2C%0A%0AMy%20name's%20example%20and%20I%20am%20a%20part%20of%20the%20Information%20Systems%20team%20here%20at%20example.%20We're%20excited%20to%20hear%20you're%20coming%20on%20board!%0A%0AJust%20a%20few%20things%20first%2C%20I%20have%20ordered%20your%20equipment%20as%20requested%20and%20it%20should%20be%20with%20you%20in%20the%20next%20week%20or%20so.%20Just%20keep%20an%20eye%20out%20for%20Amazon%20or%20UPS%20for%20deliveries.%0A%0APlease%20note%20that%20Apple%20orders%20may%20take%20longer%20but%20you%20should%20be%20cc'd%20into%20the%20order%20info%20and%20tracking%20information%20will%20be%20provided%20when%20it%20is%20shipped%2C%20so%20keep%20an%20eye%20on%20your%20emails%20for%20that.%0A%0AIf%20you%20have%20any%20questions%2C%20queries%20or%20concerns%20ahead%20of%20your%20first%20day%20please%20feel%20free%20to%20reach%20out%20to%20me%20directly%20and%20I'm%20more%20than%20happy%20to%20help%20in%20whatever%20way%20I%20can.%0A%0ATake%20a%20read%20through%20the%20below%20hyperlink%20as%20well%20when%20you%20have%20your%20laptop%20and%20want%20to%20start%20setting%20up.%20It%20will%20give%20you%20some%20high%20level%20info%20on%20some%20of%20the%20apps%20and%20tools%20we%20use%20here%20at%20example.%0A%0Ahttps%3A%2F%2Fdocs.google.com%2Fpresentation%2Fd%2F1QqjxPfjHP2k8J74gT9JXo1JSbXnOpHQFYWKZ5GZUl1E%2Fedit%3Fusp%3Dsharing%2F%0A%0AAgain%2C%20any%20questions%20etc%20please%20feel%20free%20to%20reply%20here.%20Looking%20forward%20to%20working%20with%20you.%0A%20%20%20%20%20%20%20%20%0ABest%20regards%2C%0Aexample.
+    issuetype: Task
+  args:
+    fields:
+      parent:
+        key: "{{ parent_epic.meta.key }}"
+      labels:
+        - new_employee
+  register: welcome_email_task # <var>.meta.key
+  when: onboarding_ticket_needs_processing
+
+- name: Dump Welcome Email Ticket details
+  debug:
+    var: welcome_email_task
+    verbosity: 1
+
+# Update Parent Helpdesk Ticket with Label to inform completion of task and be ignored on future runs.
+- name: Updating Parent Help Desk Ticket with ignore label...
+  community.general.jira:
+    uri: "https://{{ ansible_host }}"
+    username: "{{ jira_user }}"
+    password: "{{ jira_api_token }}"
+    issue: "{{ onboarding_parent_help_desk_ticket.meta.key }}"
+    operation: edit
+  args:
+    fields:
+        labels:
+          - parent_isum_epic
+  register: onboarding_parent_help_desk_ticket_label # <var>.meta.key
+  when: onboarding_ticket_needs_processing
